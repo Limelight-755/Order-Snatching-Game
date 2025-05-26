@@ -1,0 +1,36 @@
+# 项目特定忽略
+results/
+.venv/
+fonts/
+
+# Python忽略
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE忽略
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 操作系统忽略
+.DS_Store
+Thumbs.db 
