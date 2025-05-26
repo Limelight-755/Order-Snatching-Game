@@ -125,7 +125,7 @@ class StrategyPredictor:
         
         # 模型参数
         self.sequence_length = config.get('sequence_length', 20)
-        self.input_features = config.get('input_features', 10)  # 策略特征数
+        self.input_features = config.get('input_features', 10)  # 确保使用10个输入特征
         self.hidden_size = config.get('hidden_size', 64)
         self.num_layers = config.get('num_layers', 2)
         self.learning_rate = config.get('learning_rate', 0.001)
@@ -161,7 +161,7 @@ class StrategyPredictor:
             revenues: 收益历史
             
         Returns:
-            处理后的特征张量
+            处理后的特征张量，确保有10个输入特征
         """
         features = []
         
@@ -175,14 +175,15 @@ class StrategyPredictor:
             if i < len(market_states):
                 market_state = market_states[i]
                 feature_vector.extend([
-                    market_state.get('order_count', 0),
+                    market_state.get('demand', 0),
+                    market_state.get('supply', 0),
                     market_state.get('avg_price', 0),
-                    market_state.get('competition_level', 0),
-                    market_state.get('time_factor', 0),
-                    market_state.get('location_factor', 0),
+                    market_state.get('competition', 0),
+                    market_state.get('order_rate', 0),
+                    market_state.get('time_period', 0),
                 ])
             else:
-                feature_vector.extend([0] * 5)
+                feature_vector.extend([0] * 6)
             
             # 添加策略变化率（如果可计算）
             if i > 0:
@@ -193,6 +194,9 @@ class StrategyPredictor:
                 revenue_change = 0
                 
             feature_vector.extend([strategy_change, revenue_change])
+            
+            # 确保特征向量长度为10
+            assert len(feature_vector) == 10, f"特征向量长度应为10，但得到了{len(feature_vector)}"
             
             features.append(feature_vector)
         

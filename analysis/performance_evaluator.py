@@ -9,8 +9,44 @@ from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
 import logging
 from collections import defaultdict
+import os
+import matplotlib.font_manager as fm
 
 logger = logging.getLogger(__name__)
+
+# 设置中文字体支持
+def setup_chinese_font():
+    """设置中文字体支持"""
+    try:
+        # 使用指定的系统字体文件路径
+        font_path = r"C:\Windows\Fonts\STZHONGS.TTF"
+        
+        if os.path.exists(font_path):
+            # 注册字体
+            font_prop = fm.FontProperties(fname=font_path)
+            plt.rcParams['font.family'] = font_prop.get_name()
+            plt.rcParams['font.sans-serif'] = [font_prop.get_name()] + plt.rcParams.get('font.sans-serif', [])
+            plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+            logger.info(f"已成功配置中文字体: {font_path}")
+            return True
+        else:
+            logger.warning(f"找不到指定的字体文件: {font_path}")
+            # 回退到常见中文字体名称
+            plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'KaiTi', 'FangSong', 'Arial Unicode MS']
+            plt.rcParams['axes.unicode_minus'] = False
+            return False
+            
+    except Exception as e:
+        logger.error(f"配置中文字体失败: {e}")
+        
+        # 尝试其他备用字体
+        plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'KaiTi', 'FangSong', 'Arial Unicode MS']
+        plt.rcParams['axes.unicode_minus'] = False
+        
+        return False
+
+# 初始化设置中文字体
+chinese_font_configured = setup_chinese_font()
 
 
 @dataclass

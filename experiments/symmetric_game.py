@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 import logging
 import os
+import matplotlib.font_manager as fm
 
 from experiments.experiment_utils import (
     ExperimentConfig, ExperimentResult, RoundResult,
@@ -21,6 +22,9 @@ from ai_models.lstm_predictor import StrategyPredictor
 from config.game_config import GameConfig
 
 logger = logging.getLogger(__name__)
+
+# 中文字体路径
+chinese_font_path = r"C:\Windows\Fonts\STZHONGS.TTF"
 
 
 class SymmetricGameExperiment:
@@ -382,21 +386,10 @@ class SymmetricGameExperiment:
         strategies_a = [r.player_a_strategy for r in result.round_results]
         strategies_b = [r.player_b_strategy for r in result.round_results]
         
-        # 从visualization_utils导入字体
-        import sys
-        import os
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-        
-        try:
-            from analysis.visualization_utils import chinese_font_path
-            if chinese_font_path:
-                import matplotlib.font_manager as fm
-                font_prop = fm.FontProperties(fname=chinese_font_path)
-                has_font = True
-            else:
-                has_font = False
-        except:
-            has_font = False
+        # 直接设置中文字体
+        font_prop = None
+        if os.path.exists(chinese_font_path):
+            font_prop = fm.FontProperties(fname=chinese_font_path)
         
         plt.figure(figsize=(12, 6))
         plt.plot(rounds, strategies_a, label='玩家A策略', alpha=0.7)
@@ -411,7 +404,7 @@ class SymmetricGameExperiment:
         plt.title('对称博弈策略演化', fontsize=14, fontweight='bold')
         
         # 应用字体到所有文本元素
-        if has_font:
+        if font_prop:
             for text in plt.gca().get_xticklabels() + plt.gca().get_yticklabels():
                 text.set_fontproperties(font_prop)
             plt.gca().xaxis.label.set_fontproperties(font_prop)
@@ -438,21 +431,10 @@ class SymmetricGameExperiment:
         cumulative_a = np.cumsum(revenues_a)
         cumulative_b = np.cumsum(revenues_b)
         
-        # 从visualization_utils导入字体
-        import sys
-        import os
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-        
-        try:
-            from analysis.visualization_utils import chinese_font_path
-            if chinese_font_path:
-                import matplotlib.font_manager as fm
-                font_prop = fm.FontProperties(fname=chinese_font_path)
-                has_font = True
-            else:
-                has_font = False
-        except:
-            has_font = False
+        # 直接设置中文字体
+        font_prop = None
+        if os.path.exists(chinese_font_path):
+            font_prop = fm.FontProperties(fname=chinese_font_path)
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
         
@@ -471,7 +453,7 @@ class SymmetricGameExperiment:
         ax2.set_title('累积收益对比', fontsize=14, fontweight='bold')
         
         # 应用字体到所有文本元素
-        if has_font:
+        if font_prop:
             for ax in [ax1, ax2]:
                 for text in ax.get_xticklabels() + ax.get_yticklabels():
                     text.set_fontproperties(font_prop)
@@ -500,21 +482,10 @@ class SymmetricGameExperiment:
         if not distances:
             return
         
-        # 从visualization_utils导入字体
-        import sys
-        import os
-        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-        
-        try:
-            from analysis.visualization_utils import chinese_font_path
-            if chinese_font_path:
-                import matplotlib.font_manager as fm
-                font_prop = fm.FontProperties(fname=chinese_font_path)
-                has_font = True
-            else:
-                has_font = False
-        except:
-            has_font = False
+        # 直接设置中文字体
+        font_prop = None
+        if os.path.exists(chinese_font_path):
+            font_prop = fm.FontProperties(fname=chinese_font_path)
         
         plt.figure(figsize=(12, 6))
         plt.plot(rounds, distances, label='纳什均衡距离', color='purple', alpha=0.7)
@@ -525,7 +496,7 @@ class SymmetricGameExperiment:
         plt.title('纳什均衡收敛分析', fontsize=14, fontweight='bold')
         
         # 应用字体到所有文本元素
-        if has_font:
+        if font_prop:
             for text in plt.gca().get_xticklabels() + plt.gca().get_yticklabels():
                 text.set_fontproperties(font_prop)
             plt.gca().xaxis.label.set_fontproperties(font_prop)

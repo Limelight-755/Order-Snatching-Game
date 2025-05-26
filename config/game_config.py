@@ -120,6 +120,7 @@ class GameConfig:
     WAITING_TIME_PENALTY: float = 0.1 # 等待时间惩罚系数
     COMPETITION_BONUS: float = 0.1    # 竞争优势奖励系数
     STRATEGY_STABILITY_PENALTY: float = 0.05  # 策略变化惩罚
+    OPERATION_COST_PER_ORDER: float = 2.0  # 每单运营成本
     
     # 收益计算权重
     REVENUE_WEIGHTS: Dict[str, float] = None

@@ -139,6 +139,19 @@ class MarketEnvironment:
             'location_factor': 1.0
         }
         
+        # 市场冲击相关属性
+        self.demand_multiplier = 1.0  # 需求乘数
+        self.supply_multiplier = 1.0  # 供给乘数
+        self.max_price = self.config.MAX_PRICE_THRESHOLD  # 价格上限
+        self.price_volatility = 1.0  # 价格波动性
+        self.cost_multiplier = 1.0  # 成本乘数
+        
+        # 滑动窗口分析数据
+        self.recent_orders = []
+        self.recent_revenues = {'player_a': [], 'player_b': []}
+        self.recent_strategies = {'player_a': [], 'player_b': []}
+        self.window_size = 10  # 滑动窗口大小
+        
         logger.info("市场环境初始化完成")
     
     def reset(self):
@@ -157,11 +170,120 @@ class MarketEnvironment:
             'location_factor': 1.0
         }
         
+        # 重置冲击相关属性
+        self.demand_multiplier = 1.0
+        self.supply_multiplier = 1.0
+        self.max_price = self.config.MAX_PRICE_THRESHOLD
+        self.price_volatility = 1.0
+        self.cost_multiplier = 1.0
+        
+        # 重置滑动窗口数据
+        self.recent_orders = []
+        self.recent_revenues = {'player_a': [], 'player_b': []}
+        self.recent_strategies = {'player_a': [], 'player_b': []}
+        
         logger.debug("市场环境已重置")
     
     def get_current_state(self) -> Dict[str, Any]:
         """获取当前市场状态"""
         return self.market_state.copy()
+    
+    def get_state(self) -> Dict[str, float]:
+        """
+        获取当前市场状态，用于智能体决策
+        
+        Returns:
+            包含市场状态指标的词典
+        """
+        # 计算滑动窗口统计
+        avg_order_count = len(self.recent_orders) / max(1, self.window_size)
+        
+        avg_revenue_a = np.mean(self.recent_revenues['player_a']) if self.recent_revenues['player_a'] else 0
+        avg_revenue_b = np.mean(self.recent_revenues['player_b']) if self.recent_revenues['player_b'] else 0
+        
+        strategy_variance_a = np.var(self.recent_strategies['player_a']) if len(self.recent_strategies['player_a']) > 1 else 0
+        strategy_variance_b = np.var(self.recent_strategies['player_b']) if len(self.recent_strategies['player_b']) > 1 else 0
+        
+        # 需求和供给级别
+        demand_level = self.market_state['demand_level'] * self.demand_multiplier
+        supply_level = self.market_state['location_factor'] * self.supply_multiplier
+        
+        time_period_value = 0
+        if self.market_state['time_period'] == TimePeriod.PEAK:
+            time_period_value = 1.0
+        elif self.market_state['time_period'] == TimePeriod.NORMAL:
+            time_period_value = 0.5
+        else:  # LOW
+            time_period_value = 0.2
+        
+        return {
+            'demand': demand_level,
+            'supply': supply_level,
+            'avg_price': min(self.market_state['avg_price'], self.max_price),
+            'time_period': time_period_value,
+            'competition': self.market_state['competition_level'],
+            'order_rate': avg_order_count,
+            'avg_revenue_a': avg_revenue_a,
+            'avg_revenue_b': avg_revenue_b,
+            'strategy_variance_a': strategy_variance_a,
+            'strategy_variance_b': strategy_variance_b,
+            'avg_distance': 5.0,  # 默认平均距离
+            'total_orders': self.market_state['order_count']
+        }
+    
+    def update(self, result_a: Dict, result_b: Dict) -> Dict[str, float]:
+        """
+        更新市场状态
+        
+        Args:
+            result_a: 玩家A的行动结果
+            result_b: 玩家B的行动结果
+        
+        Returns:
+            更新后的市场状态
+        """
+        # 更新市场时间
+        self.update_market_time()
+        
+        # 更新冲击效果
+        self.update_shock_effects()
+        
+        # 更新滑动窗口数据
+        if 'revenue' in result_a:
+            self.recent_revenues['player_a'].append(result_a['revenue'])
+            if len(self.recent_revenues['player_a']) > self.window_size:
+                self.recent_revenues['player_a'].pop(0)
+        
+        if 'revenue' in result_b:
+            self.recent_revenues['player_b'].append(result_b['revenue'])
+            if len(self.recent_revenues['player_b']) > self.window_size:
+                self.recent_revenues['player_b'].pop(0)
+        
+        if 'strategy' in result_a:
+            self.recent_strategies['player_a'].append(result_a['strategy'])
+            if len(self.recent_strategies['player_a']) > self.window_size:
+                self.recent_strategies['player_a'].pop(0)
+        
+        if 'strategy' in result_b:
+            self.recent_strategies['player_b'].append(result_b['strategy'])
+            if len(self.recent_strategies['player_b']) > self.window_size:
+                self.recent_strategies['player_b'].pop(0)
+        
+        # 更新订单计数
+        if 'orders' in result_a and 'orders' in result_b:
+            total_orders = result_a['orders'] + result_b['orders']
+            self.recent_orders.append(total_orders)
+            if len(self.recent_orders) > self.window_size:
+                self.recent_orders.pop(0)
+            
+            self.market_state['order_count'] += total_orders
+            self.market_state['accepted_orders'] += total_orders
+        
+        # 更新总收益
+        if 'revenue' in result_a and 'revenue' in result_b:
+            self.market_state['total_revenue'] += (result_a['revenue'] + result_b['revenue'])
+        
+        return self.get_state()
     
     def get_time_period(self, hour: float) -> TimePeriod:
         """根据小时确定时间段类型"""
@@ -201,6 +323,10 @@ class MarketEnvironment:
         # 确保参数在合理范围内
         self.market_state['demand_level'] = max(0.1, self.market_state['demand_level'])
         self.market_state['avg_price'] = max(10.0, self.market_state['avg_price'])
+        
+        # 应用冲击乘数
+        self.market_state['demand_level'] *= self.demand_multiplier
+        self.market_state['avg_price'] = min(self.market_state['avg_price'], self.max_price)
     
     def apply_competition_effects(self, driver_strategies: Dict[str, float]):
         """
@@ -217,6 +343,9 @@ class MarketEnvironment:
         # 计算市场供给调整（定价越高，供给越少）
         supply_adjustment = np.exp(-0.1 * (avg_pricing - self.config.BASE_PRICE_MEAN))
         self.market_state['location_factor'] = max(0.3, min(2.0, supply_adjustment))
+        
+        # 应用供给乘数
+        self.market_state['location_factor'] *= self.supply_multiplier
         
         # 计算竞争激烈程度（策略差异越大，竞争越激烈）
         strategy_variance = np.var(list(driver_strategies.values()))
@@ -266,10 +395,11 @@ class MarketEnvironment:
         # 随机选择地理位置类型
         location_type = self._sample_location_type()
         
-        # 生成订单价格
+        # 生成订单价格，应用价格波动性
+        price_std = self.config.BASE_PRICE_STD * self.price_volatility
         base_price = np.random.normal(
             self.market_state['avg_price'],
-            self.config.BASE_PRICE_STD
+            price_std
         )
         
         # 应用地理位置影响
@@ -279,9 +409,9 @@ class MarketEnvironment:
         # 应用市场供给影响
         price *= self.market_state['location_factor']
         
-        # 确保价格在合理范围内
+        # 确保价格在合理范围内并受到max_price限制
         price = max(self.config.MIN_PRICE_THRESHOLD, 
-                   min(self.config.MAX_PRICE_THRESHOLD * 1.5, price))
+                   min(self.max_price, price))
         
         # 生成订单时间戳（在duration_minutes内随机分布）
         timestamp = self.current_time + (
@@ -443,6 +573,9 @@ class MarketEnvironment:
             avg_waiting_time = self._estimate_waiting_time(driver, orders, strategies)
             waiting_cost = avg_waiting_time * self.config.WAITING_TIME_PENALTY
             
+            # 运营成本（受cost_multiplier影响）
+            operation_cost = len(orders) * self.config.OPERATION_COST_PER_ORDER * self.cost_multiplier
+            
             # 策略稳定性奖励（减少频繁变化的成本）
             stability_bonus = self._calculate_stability_bonus(driver)
             
@@ -450,7 +583,7 @@ class MarketEnvironment:
             competition_bonus = self._calculate_competition_bonus(driver, revenues)
             
             # 最终收益
-            net_revenue = (gross_revenue - waiting_cost + 
+            net_revenue = (gross_revenue - waiting_cost - operation_cost + 
                           stability_bonus + competition_bonus)
             
             revenues[driver] = max(0.0, net_revenue)  # 确保收益非负

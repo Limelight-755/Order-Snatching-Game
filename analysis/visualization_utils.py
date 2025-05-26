@@ -25,82 +25,8 @@ import shutil
 # 配置日志
 logger = logging.getLogger(__name__)
 
-# 下载和设置 WenQuanYi 中文字体
-def setup_chinese_font():
-    """下载并设置开源中文字体"""
-    # 字体文件保存路径
-    font_dir = os.path.join(os.path.dirname(__file__), "..", "fonts")
-    os.makedirs(font_dir, exist_ok=True)
-    wqy_font_path = os.path.join(font_dir, "wqy-microhei.ttc")
-    
-    # 如果字体不存在则下载
-    if not os.path.exists(wqy_font_path):
-        try:
-            logger.info("开始下载开源中文字体 WenQuanYi...")
-            # 文泉驿微米黑字体下载地址
-            font_url = "https://downloads.sourceforge.net/wqy/wqy-microhei-0.2.0-beta.tar.gz"
-            
-            # 使用临时目录下载和解压
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tmp_file = os.path.join(tmpdir, "wqy-microhei.tar.gz")
-                
-                # 下载字体文件
-                urllib.request.urlretrieve(font_url, tmp_file)
-                logger.info(f"字体下载完成: {tmp_file}")
-                
-                # 解压字体文件
-                import tarfile
-                with tarfile.open(tmp_file) as tar:
-                    tar.extractall(path=tmpdir)
-                
-                # 查找并复制字体文件
-                for root, _, files in os.walk(tmpdir):
-                    for file in files:
-                        if file.endswith(".ttc") or file.endswith(".ttf"):
-                            src_font = os.path.join(root, file)
-                            shutil.copy(src_font, wqy_font_path)
-                            logger.info(f"字体文件已保存至: {wqy_font_path}")
-                            break
-            
-            # 如果下载失败，使用嵌入的字体数据（这里略去）
-        except Exception as e:
-            logger.error(f"下载字体失败: {e}")
-            # 回退到系统字体
-            return False
-    
-    # 注册字体
-    try:
-        if os.path.exists(wqy_font_path):
-            font_prop = fm.FontProperties(fname=wqy_font_path)
-            mpl.rcParams['font.family'] = font_prop.get_name()
-            # 设置默认字体
-            plt.rcParams['font.sans-serif'] = [font_prop.get_name()] + plt.rcParams.get('font.sans-serif', [])
-            plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
-            
-            # 测试字体
-            fig = plt.figure(figsize=(1, 1))
-            fig.text(0.5, 0.5, '中文测试', ha='center', va='center')
-            plt.close(fig)
-            
-            logger.info(f"已成功加载中文字体: {wqy_font_path}")
-            return wqy_font_path
-    except Exception as e:
-        logger.error(f"加载中文字体失败: {e}")
-    
-    # 回退到系统字体
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'Arial Unicode MS']
-    plt.rcParams['axes.unicode_minus'] = False
-    
-    return None
-
-# 初始化设置中文字体
-chinese_font_path = setup_chinese_font()
-
-# 如果无法下载或加载文泉驿字体，使用系统自带字体
-if not chinese_font_path:
-    # 设置matplotlib字体
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'KaiTi', 'FangSong']
-    plt.rcParams['axes.unicode_minus'] = False
+# 设置中文字体路径
+chinese_font_path = r"C:\Windows\Fonts\STZHONGS.TTF"
 
 class VisualizationUtils:
     """
@@ -124,7 +50,20 @@ class VisualizationUtils:
         
         self.default_figsize = figsize
         self.colors = plt.cm.Set1(np.linspace(0, 1, 10))
-        self.font_path = chinese_font_path
+        
+        # 设置中文字体
+        if os.path.exists(chinese_font_path):
+            self.font_prop = fm.FontProperties(fname=chinese_font_path)
+            plt.rcParams['font.family'] = self.font_prop.get_name()
+            plt.rcParams['font.sans-serif'] = [self.font_prop.get_name()] + plt.rcParams.get('font.sans-serif', [])
+            plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+            logger.info(f"已成功配置中文字体: {chinese_font_path}")
+        else:
+            # 回退到常见中文字体名称
+            plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'KaiTi', 'FangSong', 'Arial Unicode MS']
+            plt.rcParams['axes.unicode_minus'] = False
+            self.font_prop = None
+            logger.warning(f"找不到指定的字体文件: {chinese_font_path}，使用备用字体")
         
         # 测试中文字体显示
         try:
@@ -136,6 +75,58 @@ class VisualizationUtils:
             logger.warning(f"中文字体测试失败: {e}")
         
         logger.info(f"可视化工具初始化完成: 风格={style}, 图形大小={figsize}")
+    
+    def apply_font_to_axis(self, ax):
+        """
+        将中文字体应用到坐标轴上的所有文本元素
+        
+        Args:
+            ax: matplotlib坐标轴对象
+        """
+        if not self.font_prop:
+            return
+            
+        # 应用到标题
+        if ax.get_title():
+            ax.set_title(ax.get_title(), fontproperties=self.font_prop)
+        
+        # 应用到x轴标签
+        if ax.get_xlabel():
+            ax.set_xlabel(ax.get_xlabel(), fontproperties=self.font_prop)
+        
+        # 应用到y轴标签
+        if ax.get_ylabel():
+            ax.set_ylabel(ax.get_ylabel(), fontproperties=self.font_prop)
+        
+        # 应用到刻度标签
+        for label in ax.get_xticklabels():
+            label.set_fontproperties(self.font_prop)
+        
+        for label in ax.get_yticklabels():
+            label.set_fontproperties(self.font_prop)
+        
+        # 应用到图例
+        if ax.get_legend():
+            for text in ax.get_legend().get_texts():
+                text.set_fontproperties(self.font_prop)
+    
+    def apply_font_to_figure(self, fig):
+        """
+        将中文字体应用到整个图形的所有文本元素
+        
+        Args:
+            fig: matplotlib图形对象
+        """
+        if not self.font_prop:
+            return
+            
+        # 应用到所有子图
+        for ax in fig.axes:
+            self.apply_font_to_axis(ax)
+        
+        # 应用到图形标题
+        if fig._suptitle:
+            fig._suptitle.set_fontproperties(self.font_prop)
     
     def plot_strategy_evolution(self, round_results, save_path: Optional[str] = None,
                               show_phases: bool = True):
@@ -212,7 +203,7 @@ class VisualizationUtils:
                 ax1.axvspan(exploration_end, learning_end, alpha=0.1, color='#FFF5E6', label='学习期')
                 ax1.axvspan(learning_end, max(rounds), alpha=0.1, color='#E6F5E6', label='均衡期')
             
-            # 设置轴标签和标题
+            # 设置轴标签和标题 - 使用中文字体
             ax1.set_xlabel('轮次', fontsize=12, fontweight='bold')
             ax1.set_ylabel('策略值（定价阈值）', fontsize=12, fontweight='bold')
             ax1.set_title('策略演化过程', fontsize=14, fontweight='bold', pad=15)
@@ -261,7 +252,13 @@ class VisualizationUtils:
                               shadow=True, fancybox=True, fontsize=10)
             legend2.get_frame().set_facecolor('#FFFFFF')
             
+            # 设置整体标题
+            fig.suptitle('策略演化分析', fontsize=16, fontweight='bold')
+            
             plt.tight_layout(pad=2.0)
+            
+            # 应用中文字体到所有文本元素
+            self.apply_font_to_figure(fig)
             
             if save_path:
                 plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -337,25 +334,8 @@ class VisualizationUtils:
         
         plt.tight_layout()
         
-        # 应用中文字体
-        if hasattr(self, 'font_path') and self.font_path:
-            try:
-                font_prop = fm.FontProperties(fname=self.font_path)
-                # 为所有文本元素设置字体
-                for ax in axes.flatten():
-                    for text in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                              ax.get_xticklabels() + ax.get_yticklabels()):
-                        text.set_fontproperties(font_prop)
-                    # 图例文本
-                    if ax.get_legend() is not None:
-                        for text in ax.get_legend().get_texts():
-                            text.set_fontproperties(font_prop)
-                
-                # 设置整个图表的标题字体
-                if fig.get_label() or fig._suptitle:
-                    fig._suptitle.set_fontproperties(font_prop)
-            except Exception as e:
-                logger.warning(f"应用中文字体失败: {e}")
+        # 应用中文字体到所有文本元素
+        self.apply_font_to_figure(fig)
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -465,31 +445,6 @@ class VisualizationUtils:
             axes[1, 1].set_title('纳什均衡比例', fontsize=14, fontweight='bold')
         
         plt.tight_layout()
-        
-        # 应用中文字体
-        if hasattr(self, 'font_path') and self.font_path:
-            try:
-                font_prop = fm.FontProperties(fname=self.font_path)
-                # 为所有文本元素设置字体
-                for ax in axes.flatten():
-                    for text in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                              ax.get_xticklabels() + ax.get_yticklabels()):
-                        if text:
-                            text.set_fontproperties(font_prop)
-                    # 图例文本
-                    if ax.get_legend() is not None:
-                        for text in ax.get_legend().get_texts():
-                            text.set_fontproperties(font_prop)
-                    # 饼图文本
-                    if ax.texts:
-                        for text in ax.texts:
-                            text.set_fontproperties(font_prop)
-                
-                # 设置整个图表的标题字体
-                if fig.get_label() or hasattr(fig, '_suptitle') and fig._suptitle:
-                    fig._suptitle.set_fontproperties(font_prop)
-            except Exception as e:
-                logger.warning(f"应用中文字体失败: {e}")
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -671,27 +626,6 @@ class VisualizationUtils:
         axes[1, 1].grid(True, alpha=0.3)
         
         plt.tight_layout()
-        
-        # 应用中文字体
-        if hasattr(self, 'font_path') and self.font_path:
-            try:
-                font_prop = fm.FontProperties(fname=self.font_path)
-                # 为所有文本元素设置字体
-                for ax in axes.flatten():
-                    for text in ([ax.title, ax.xaxis.label, ax.yaxis.label] +
-                              ax.get_xticklabels() + ax.get_yticklabels()):
-                        if text:
-                            text.set_fontproperties(font_prop)
-                    # 图例文本
-                    if ax.get_legend() is not None:
-                        for text in ax.get_legend().get_texts():
-                            text.set_fontproperties(font_prop)
-                
-                # 设置整个图表的标题字体
-                if fig.get_label() or hasattr(fig, '_suptitle') and fig._suptitle:
-                    fig._suptitle.set_fontproperties(font_prop)
-            except Exception as e:
-                logger.warning(f"应用中文字体失败: {e}")
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
