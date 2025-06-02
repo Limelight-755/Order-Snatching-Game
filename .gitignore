@@ -2,6 +2,13 @@
 results/
 .venv/
 fonts/
+网约车司机博弈定价策略研究.tex
+纳什均衡求解算法详解.md
+海萨尼博弈树.svg
+实验运行结果简单总结.md
+model_execution_detail.md
+模型运行流程图.svg
+建模思路报告.md
 
 # Python忽略
 __pycache__/

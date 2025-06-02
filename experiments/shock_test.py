@@ -236,7 +236,7 @@ class ShockTestExperiment:
                 self.market_env.cost_multiplier = 1.0
         
         return active_shock_info
-    
+        
     def run_experiment(self) -> ExperimentResult:
         """
         运行冲击测试实验
@@ -251,7 +251,7 @@ class ShockTestExperiment:
         )
         
         total_rounds = self.config.total_rounds
-        num_repetitions = self.config.repetitions if hasattr(self.config, 'repetitions') else 10
+        num_repetitions = self.config.repetitions if hasattr(self.config, 'repetitions') else 1  # 默认只运行1次
         
         logger.info(f"开始冲击测试实验: {total_rounds} 轮 x {num_repetitions} 次重复")
         
@@ -465,7 +465,7 @@ class ShockTestExperiment:
         self.visualize_shock_effects(result, save_path=visualization_path)
         result.shock_visualization_path = visualization_path
         
-        return result
+        return result 
 
     def _initialize_data_storage(self):
         """初始化数据记录"""
@@ -720,8 +720,8 @@ class ShockTestExperiment:
             plt.rcParams['axes.unicode_minus'] = False
         
         # 创建多个子图
-        fig = plt.figure(figsize=(15, 20))
-        gs = GridSpec(4, 2, figure=fig)
+        fig = plt.figure(figsize=(18, 24))
+        gs = GridSpec(6, 2, figure=fig)  # 增加到6行
         
         # 提取数据
         rounds = [r.round_number for r in result.round_results]
@@ -730,23 +730,69 @@ class ShockTestExperiment:
         revenues_a = [r.player_a_revenue for r in result.round_results]
         revenues_b = [r.player_b_revenue for r in result.round_results]
         
+        # 计算收益差值的绝对值
+        revenue_abs_diff = [abs(a - b) for a, b in zip(revenues_a, revenues_b)]
+        
+        # 将轮次转换为天
+        # 每24小时为1天，收益聚合为每天总收益
+        days = [r // 24 + 1 for r in rounds]  # 轮次转换为天数（从1开始）
+        unique_days = sorted(list(set(days)))
+        
+        # 计算每天的总收益
+        daily_revenues_a = {}
+        daily_revenues_b = {}
+        daily_abs_diff = {}
+        daily_strategies_a = {}  # 计算每天的平均策略
+        daily_strategies_b = {}
+        daily_count = {}  # 记录每天的数据点数量
+        
+        for day in unique_days:
+            daily_revenues_a[day] = 0
+            daily_revenues_b[day] = 0
+            daily_abs_diff[day] = 0
+            daily_strategies_a[day] = 0
+            daily_strategies_b[day] = 0
+            daily_count[day] = 0
+        
+        for i, day in enumerate(days):
+            daily_revenues_a[day] += revenues_a[i]
+            daily_revenues_b[day] += revenues_b[i]
+            daily_abs_diff[day] += revenue_abs_diff[i]
+            daily_strategies_a[day] += strategies_a[i]
+            daily_strategies_b[day] += strategies_b[i]
+            daily_count[day] += 1
+        
+        # 计算每天平均策略
+        for day in unique_days:
+            if daily_count[day] > 0:
+                daily_strategies_a[day] /= daily_count[day]
+                daily_strategies_b[day] /= daily_count[day]
+        
+        # 转换为列表形式
+        days_list = list(unique_days)
+        daily_rev_a_list = [daily_revenues_a[day] for day in days_list]
+        daily_rev_b_list = [daily_revenues_b[day] for day in days_list]
+        daily_abs_diff_list = [daily_abs_diff[day] for day in days_list]
+        daily_strat_a_list = [daily_strategies_a[day] for day in days_list]
+        daily_strat_b_list = [daily_strategies_b[day] for day in days_list]
+        
         # 分析冲击效果
         shock_analysis = self.analyze_shock_effects(result)
         
         # 绘制策略图
         ax1 = fig.add_subplot(gs[0, :])
-        ax1.plot(rounds, strategies_a, 'b-', label='玩家A策略')
-        ax1.plot(rounds, strategies_b, 'r-', label='玩家B策略')
-        ax1.set_title('策略随时间变化', fontproperties=fontprop, fontsize=14)
-        ax1.set_xlabel('轮次', fontproperties=fontprop)
+        ax1.plot(days_list, daily_strat_a_list, 'b-', label='玩家A策略')
+        ax1.plot(days_list, daily_strat_b_list, 'r-', label='玩家B策略')
+        ax1.set_title('策略随时间变化（日均）', fontproperties=fontprop, fontsize=14)
+        ax1.set_xlabel('天数', fontproperties=fontprop)
         ax1.set_ylabel('策略值（价格）', fontproperties=fontprop)
         ax1.legend(prop=fontprop)
         ax1.grid(True)
         
-        # 标记冲击事件
+        # 标记冲击事件（转换为天）
         for shock in self.shock_events:
-            shock_round = shock['round']
-            shock_end = shock_round + shock['duration']
+            shock_day = shock['round'] // 24 + 1
+            shock_end_day = (shock['round'] + shock['duration']) // 24 + 1
             shock_type = shock['type']
             
             # 不同类型的冲击用不同颜色标记
@@ -762,26 +808,39 @@ class ShockTestExperiment:
             }.get(shock_type, 'gray')
             
             # 在策略图中标记冲击区间
-            ax1.axvspan(shock_round, shock_end, alpha=0.2, color=color)
-            ax1.axvline(x=shock_round, color=color, linestyle='--')
-            ax1.text(shock_round, min(strategies_a + strategies_b) - 2, 
+            ax1.axvspan(shock_day, shock_end_day, alpha=0.2, color=color)
+            ax1.axvline(x=shock_day, color=color, linestyle='--')
+            ax1.text(shock_day, min(daily_strat_a_list + daily_strat_b_list) - 2, 
                       f"{shock_type}", rotation=90, 
                       verticalalignment='bottom', fontproperties=fontprop)
         
-        # 绘制收益图
-        ax2 = fig.add_subplot(gs[1, :])
-        ax2.plot(rounds, revenues_a, 'b-', label='玩家A收益')
-        ax2.plot(rounds, revenues_b, 'r-', label='玩家B收益')
-        ax2.set_title('收益随时间变化', fontproperties=fontprop, fontsize=14)
-        ax2.set_xlabel('轮次', fontproperties=fontprop)
-        ax2.set_ylabel('收益', fontproperties=fontprop)
-        ax2.legend(prop=fontprop)
-        ax2.grid(True)
+        # 计算每天收益差值的绝对值（先计算每天总收益，再取差值绝对值）
+        daily_abs_diff_list = [abs(a - b) for a, b in zip(daily_rev_a_list, daily_rev_b_list)]
         
-        # 同样在收益图中标记冲击区间
+        # 创建上下两个子图，显示全部30天
+        ax_top = fig.add_subplot(gs[1, :])
+        ax_bottom = fig.add_subplot(gs[2, :], sharex=ax_top)
+        
+        # 定义新的配色方案 (将RGB值转换为matplotlib可识别的格式)
+        color_a = (250/255, 170/255, 137/255)  # 橙红色
+        color_b = (255/255, 220/255, 126/255)  # 黄色
+        color_diff = (126/255, 208/255, 248/255)  # 蓝色
+        
+        # 上部分：收益曲线
+        ax_top.plot(days_list, daily_rev_a_list, label='玩家A收益', alpha=0.8, color=color_a, linewidth=1.5)
+        ax_top.plot(days_list, daily_rev_b_list, label='玩家B收益', alpha=0.8, color=color_b, linewidth=1.5)
+        ax_top.set_title(f'市场冲击测试日收益对比 (30天)', fontproperties=fontprop, fontsize=14)
+        ax_top.set_ylabel('日收益（元/天）', fontproperties=fontprop)
+        ax_top.legend(prop=fontprop)
+        ax_top.grid(True, alpha=0.3)
+        
+        # 设置x轴刻度为整数天
+        ax_top.set_xticks(list(range(1, max(days_list)+1, 2)))  # 每隔2天显示一个刻度
+        
+        # 标记冲击区间
         for shock in self.shock_events:
-            shock_round = shock['round']
-            shock_end = shock_round + shock['duration']
+            shock_day = shock['round'] // 24 + 1
+            shock_end_day = (shock['round'] + shock['duration']) // 24 + 1
             shock_type = shock['type']
             
             color = {
@@ -795,12 +854,43 @@ class ShockTestExperiment:
                 'market_crash': 'black'
             }.get(shock_type, 'gray')
             
-            ax2.axvspan(shock_round, shock_end, alpha=0.2, color=color)
+            ax_top.axvspan(shock_day, shock_end_day, alpha=0.2, color=color)
+            ax_top.axvline(x=shock_day, color=color, linestyle='--')
+            # 添加标签（只在上图显示）
+            ax_top.text(shock_day, min(daily_rev_a_list + daily_rev_b_list) - 2, 
+                      f"{shock_type}", rotation=90, 
+                      verticalalignment='bottom', fontproperties=fontprop, fontsize=8)
+        
+        # 下部分：收益差值绝对值
+        ax_bottom.plot(days_list, daily_abs_diff_list, label='收益差值绝对值', color=color_diff, alpha=0.8, linewidth=1.5)
+        ax_bottom.fill_between(days_list, daily_abs_diff_list, alpha=0.3, color=color_diff)
+        ax_bottom.set_xlabel('天数', fontproperties=fontprop)
+        ax_bottom.set_ylabel('收益差值绝对值（元/天）', fontproperties=fontprop)
+        ax_bottom.grid(True, alpha=0.3)
+        ax_bottom.legend(prop=fontprop)
+        
+        # 标记冲击区间（下部图）
+        for shock in self.shock_events:
+            shock_day = shock['round'] // 24 + 1
+            shock_end_day = (shock['round'] + shock['duration']) // 24 + 1
+            color = {
+                'demand_surge': 'green',
+                'supply_shortage': 'red',
+                'price_regulation': 'purple',
+                'competition_increase': 'orange',
+                'demand_drop': 'brown',
+                'market_disruption': 'magenta',
+                'technology_shift': 'cyan',
+                'market_crash': 'black'
+            }.get(shock['type'], 'gray')
+            
+            ax_bottom.axvspan(shock_day, shock_end_day, alpha=0.2, color=color)
+            ax_bottom.axvline(x=shock_day, color=color, linestyle='--')
         
         # 绘制冲击影响分析
         if shock_analysis['strategy_changes'] and shock_analysis['revenue_changes']:
             # 变化率对比图
-            ax3 = fig.add_subplot(gs[2, 0])
+            ax3 = fig.add_subplot(gs[4, 0])
             shock_types = [sc['shock_type'] for sc in shock_analysis['strategy_changes']]
             strategy_changes_a = [sc['player_a'] * 100 for sc in shock_analysis['strategy_changes']]  # 转为百分比
             strategy_changes_b = [sc['player_b'] * 100 for sc in shock_analysis['strategy_changes']]
@@ -827,7 +917,7 @@ class ShockTestExperiment:
             ax3.axhline(y=0, color='k', linestyle='-', alpha=0.3)
             
             # 恢复时间分析
-            ax4 = fig.add_subplot(gs[2, 1])
+            ax4 = fig.add_subplot(gs[4, 1])
             recovery_times = [rc.get('recovery_time', 0) for rc in shock_analysis['revenue_changes']]
             
             ax4.bar(x, recovery_times, width*2, label='恢复时间', color='purple')
@@ -839,7 +929,7 @@ class ShockTestExperiment:
             
             # 冲击类型分析对比
             if 'shock_type_analysis' in shock_analysis and shock_analysis['shock_type_analysis']:
-                ax5 = fig.add_subplot(gs[3, :])
+                ax5 = fig.add_subplot(gs[5, :])
                 
                 shock_types_analysis = list(shock_analysis['shock_type_analysis'].keys())
                 avg_strategy_changes_a = [data['avg_strategy_change_a'] * 100 for _, data in shock_analysis['shock_type_analysis'].items()]

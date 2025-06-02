@@ -168,30 +168,54 @@ class VisualizationUtils:
                 logger.error(f"数据格式错误: {e}")
                 return
             
+            # 按天计算平均值（24轮为一天）
+            hours_per_day = 24
+            daily_rounds = []
+            daily_strategies_a = []
+            daily_strategies_b = []
+            
+            for day_start in range(0, len(rounds), hours_per_day):
+                day_end = min(day_start + hours_per_day, len(rounds))
+                if day_end > day_start:
+                    # 计算当天的平均策略值
+                    day_strategies_a = strategies_a[day_start:day_end]
+                    day_strategies_b = strategies_b[day_start:day_end]
+                    
+                    if day_strategies_a and day_strategies_b:
+                        daily_rounds.append(day_start + hours_per_day // 2)  # 使用天的中点作为x坐标
+                        daily_strategies_a.append(sum(day_strategies_a) / len(day_strategies_a))
+                        daily_strategies_b.append(sum(day_strategies_b) / len(day_strategies_b))
+            
+            # 如果没有足够数据按天分组，则使用原始数据
+            if not daily_rounds:
+                daily_rounds = rounds
+                daily_strategies_a = strategies_a
+                daily_strategies_b = strategies_b
+            
             # 动态调整x轴范围
-            max_rounds = max(rounds) if rounds else 100
-            x_ticks_step = max(1, max_rounds // 10)  # 确保至少有10个刻度
+            max_rounds = max(daily_rounds) if daily_rounds else 100
+            x_ticks_step = max(hours_per_day, max_rounds // 10)  # 确保至少有10个刻度，且以天为单位
             x_ticks = list(range(0, max_rounds + 1, x_ticks_step))
             
             # 策略值演化 - 更美观的线条和配色
-            ax1.plot(rounds, strategies_a, color='#3A76AF', label='玩家A策略', 
-                    linewidth=2, alpha=0.9, zorder=10)
-            ax1.plot(rounds, strategies_b, color='#6ABE5E', label='玩家B策略', 
-                    linewidth=2, alpha=0.9, zorder=10)
+            ax1.plot(daily_rounds, daily_strategies_a, color='#3A76AF', label='玩家A策略', 
+                    linewidth=2, alpha=0.9, zorder=10, marker='o', markersize=4)
+            ax1.plot(daily_rounds, daily_strategies_b, color='#6ABE5E', label='玩家B策略', 
+                    linewidth=2, alpha=0.9, zorder=10, marker='s', markersize=4)
             
             # 背景和网格设置
             ax1.set_facecolor('#F8F8FA')  # 设置子图背景
             ax1.grid(True, linestyle='--', alpha=0.7, color='#CCCCCC')
             
             # 动态确定y轴范围，增加上下边距
-            min_y = min(min(strategies_a), min(strategies_b)) - 5
-            max_y = max(max(strategies_a), max(strategies_b)) + 5
+            min_y = min(min(daily_strategies_a), min(daily_strategies_b)) - 5
+            max_y = max(max(daily_strategies_a), max(daily_strategies_b)) + 5
             ax1.set_ylim(min_y, max_y)
             
             if show_phases and len(rounds) >= 200:
-                # 添加学习阶段划分线
-                exploration_end = min(50, len(rounds) // 10)
-                learning_end = min(200, len(rounds) * 4 // 10)
+                # 添加学习阶段划分线（按新的阶段划分）
+                exploration_end = 120  # 探索期结束
+                learning_end = 360     # 学习期结束，均衡期开始
                 
                 ax1.axvline(x=exploration_end, color='#FF7F7F', linestyle='--', 
                          alpha=0.6, label='探索期结束')
@@ -201,12 +225,12 @@ class VisualizationUtils:
                 # 添加阶段背景色
                 ax1.axvspan(0, exploration_end, alpha=0.1, color='#FFE6E6', label='探索期')
                 ax1.axvspan(exploration_end, learning_end, alpha=0.1, color='#FFF5E6', label='学习期')
-                ax1.axvspan(learning_end, max(rounds), alpha=0.1, color='#E6F5E6', label='均衡期')
+                ax1.axvspan(learning_end, max(daily_rounds), alpha=0.1, color='#E6F5E6', label='均衡期')
             
             # 设置轴标签和标题 - 使用中文字体
             ax1.set_xlabel('轮次', fontsize=12, fontweight='bold')
             ax1.set_ylabel('策略值（定价阈值）', fontsize=12, fontweight='bold')
-            ax1.set_title('策略演化过程', fontsize=14, fontweight='bold', pad=15)
+            ax1.set_title('策略演化过程（日平均值）', fontsize=14, fontweight='bold', pad=15)
             
             # 设置刻度和边框
             ax1.set_xticks(x_ticks)
@@ -220,17 +244,17 @@ class VisualizationUtils:
             legend.get_frame().set_facecolor('#FFFFFF')
             
             # 策略差异演化图 - 使用紫色渐变填充效果
-            strategy_diff = [abs(a - b) for a, b in zip(strategies_a, strategies_b)]
+            strategy_diff = [abs(a - b) for a, b in zip(daily_strategies_a, daily_strategies_b)]
             
             # 创建更美观的策略差异图
             ax2.set_facecolor('#F8F8FA')  # 设置子图背景
             ax2.grid(True, linestyle='--', alpha=0.7, color='#CCCCCC')
             
-            ax2.plot(rounds, strategy_diff, color='#9467BD', linewidth=2.5, 
-                   alpha=0.9, label='策略差异', zorder=10)
+            ax2.plot(daily_rounds, strategy_diff, color='#9467BD', linewidth=2.5, 
+                   alpha=0.9, label='策略差异', zorder=10, marker='D', markersize=4)
             
             # 渐变填充区域
-            ax2.fill_between(rounds, strategy_diff, color='#9467BD', alpha=0.3)
+            ax2.fill_between(daily_rounds, strategy_diff, color='#9467BD', alpha=0.3)
             
             # 动态确定y轴范围
             max_diff = max(strategy_diff) if strategy_diff else 0
@@ -239,7 +263,7 @@ class VisualizationUtils:
             # 设置轴标签和标题
             ax2.set_xlabel('轮次', fontsize=12, fontweight='bold')
             ax2.set_ylabel('策略差异', fontsize=12, fontweight='bold')
-            ax2.set_title('策略差异演化', fontsize=14, fontweight='bold', pad=15)
+            ax2.set_title('策略差异演化（日平均值）', fontsize=14, fontweight='bold', pad=15)
             
             # 设置刻度和边框
             ax2.set_xticks(x_ticks)
@@ -710,8 +734,8 @@ class VisualizationUtils:
         
         # 7-10. 学习阶段分析
         if len(rounds) >= 200:
-            exploration_end = min(50, len(rounds) // 10)
-            learning_end = min(200, len(rounds) * 4 // 10)
+            exploration_end = 120  # 探索期结束
+            learning_end = 360     # 学习期结束，均衡期开始
             
             phases = {
                 '探索期': (0, exploration_end),

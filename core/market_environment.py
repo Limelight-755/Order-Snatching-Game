@@ -508,19 +508,37 @@ class MarketEnvironment:
     
     def _calculate_acceptance_probability(self, order: Order, threshold: float, driver: str) -> float:
         """
-        计算司机接受订单的概率
+        计算司机接受订单的概率（支持低价策略版）
         
         考虑因素：
         - 价格相对于阈值的比例
+        - 定价策略的合理性（过高定价降低接单概率）
         - 地理位置类型
         - 市场竞争程度
         - 随机因素
         """
-        base_probability = 0.8  # 基础接受概率
+        base_probability = 0.75  # 基础接受概率（略降低）
         
-        # 价格因素：价格越高于阈值，接受概率越大
+        # 价格因素：价格需要合理高于阈值，但不能过高
         price_ratio = order.price / threshold
-        price_factor = min(1.2, price_ratio ** 0.5)
+        if price_ratio >= 1.0:  # 价格达到阈值
+            if price_ratio <= 1.5:  # 合理价格范围
+                price_factor = min(1.1, 0.8 + price_ratio * 0.3)  # 适度奖励
+            else:  # 价格过高，接单意愿下降
+                price_factor = max(0.6, 1.1 - (price_ratio - 1.5) * 0.3)  # 价格过高时降低概率
+        else:  # 价格低于阈值
+            price_factor = price_ratio * 0.7  # 价格不足时大幅降低概率
+        
+        # 定价策略合理性因素（新增）
+        strategy_factor = 1.0
+        if threshold <= 30.0:  # 合理低价策略
+            strategy_factor = 1.2  # 20%提升接单概率
+        elif threshold <= 35.0:  # 中等价格策略
+            strategy_factor = 1.0  # 保持原概率
+        else:  # 高价策略
+            # 定价过高时，即使订单价格够高，也降低接单概率（模拟市场抵制）
+            excess_threshold = threshold - 35.0
+            strategy_factor = max(0.7, 1.0 - excess_threshold / 20.0)  # 最多降低30%
         
         # 地理位置因素
         location_factor = {
@@ -529,115 +547,188 @@ class MarketEnvironment:
             LocationType.REMOTE: 0.9    # 偏远区域稍微降低意愿
         }[order.location_type]
         
-        # 竞争因素：竞争越激烈，越不愿意错过订单
-        competition_factor = 1.0 + self.market_state['competition_level'] * 0.2
+        # 竞争因素：竞争越激烈，越不愿意错过订单（但高价策略受影响更大）
+        competition_factor = 1.0 + self.market_state['competition_level'] * 0.15
+        if threshold > 35.0:  # 高价策略时竞争因素影响减弱
+            competition_factor = 1.0 + self.market_state['competition_level'] * 0.05
         
-        # 时间因素：高峰期更愿意接单
+        # 时间因素：高峰期更愿意接单，但高价策略受益减少
         time_factor = {
-            TimePeriod.PEAK: 1.1,
+            TimePeriod.PEAK: 1.1 if threshold <= 35.0 else 1.05,    # 高价策略高峰期优势减少
             TimePeriod.NORMAL: 1.0,
-            TimePeriod.LOW: 0.95
+            TimePeriod.LOW: 0.95 if threshold <= 35.0 else 0.85     # 高价策略低峰期更难接单
         }[order.time_period]
+        
+        # 市场适应性因素（新增）
+        # 模拟乘客对高价的抵制和对合理价格的偏好
+        market_acceptance = 1.0
+        if threshold <= 25.0:  # 低价策略，市场接受度高
+            market_acceptance = 1.1
+        elif threshold > 40.0:  # 高价策略，市场接受度低
+            market_acceptance = 0.8
         
         # 随机因素（模拟司机的个人状态变化）
         random_factor = np.random.uniform(0.9, 1.1)
         
-        final_probability = (base_probability * price_factor * location_factor * 
-                           competition_factor * time_factor * random_factor)
+        final_probability = (base_probability * price_factor * strategy_factor * location_factor * 
+                           competition_factor * time_factor * market_acceptance * random_factor)
         
         return min(1.0, final_probability)
     
     def calculate_driver_revenues(self, driver_orders: Dict[str, List[Order]], 
                                  strategies: Dict[str, float]) -> Dict[str, float]:
         """
-        计算司机的收益
+        计算司机收益（支持低价策略版）
         
         Args:
-            driver_orders: 司机接受的订单
-            strategies: 司机策略
+            driver_orders: 司机接受的订单 {司机名: 订单列表}
+            strategies: 司机策略 {司机名: 定价阈值}
         
         Returns:
-            司机收益字典
+            司机收益字典 {司机名: 收益}
         """
         revenues = {}
         
+        # 计算策略相似度
+        strategy_values = list(strategies.values())
+        strategy_similarity = self._calculate_strategy_similarity_simple(strategy_values)
+        
         for driver, orders in driver_orders.items():
             if not orders:
-                revenues[driver] = 0.0
+                # 基础保底收益（降低，因为没接到单说明定价可能过高）
+                revenues[driver] = 5.0  # 降低保底收益
                 continue
             
-            # 基础收入：订单价格总和
-            gross_revenue = sum(order.price for order in orders)
+            # 基础收益（订单收入）
+            base_revenue = sum(order.price for order in orders)
             
-            # 等待时间成本
-            avg_waiting_time = self._estimate_waiting_time(driver, orders, strategies)
-            waiting_cost = avg_waiting_time * self.config.WAITING_TIME_PENALTY
+            # 1. 基础收益保障
+            guaranteed_revenue = base_revenue * 0.95  # 95%保障
             
-            # 运营成本（受cost_multiplier影响）
-            operation_cost = len(orders) * self.config.OPERATION_COST_PER_ORDER * self.cost_multiplier
+            # 2. 策略相似度奖励（现金奖励）
+            similarity_bonus = base_revenue * strategy_similarity * 0.2  # 降低到20%
             
-            # 策略稳定性奖励（减少频繁变化的成本）
-            stability_bonus = self._calculate_stability_bonus(driver)
+            # 3. 合理定价策略奖励（支持低价策略）
+            driver_strategy = strategies[driver]
+            strategy_bonus = 0
             
-            # 竞争优势奖励
-            competition_bonus = self._calculate_competition_bonus(driver, revenues)
+            # 重新设计定价奖励：支持20-30元的合理低价区间
+            if 20.0 <= driver_strategy <= 30.0:  # 合理低价区间
+                # 越接近25元（合理低价），奖励越高
+                optimal_price = 25.0
+                distance_from_optimal = abs(driver_strategy - optimal_price)
+                max_distance = 5.0
+                strategy_bonus = base_revenue * (1.0 - distance_from_optimal / max_distance) * 0.25  # 最高25%奖励
+            elif 30.0 < driver_strategy <= 35.0:  # 中等价格区间，奖励降低
+                distance_from_30 = driver_strategy - 30.0
+                strategy_bonus = base_revenue * (1.0 - distance_from_30 / 5.0) * 0.15  # 最高15%奖励
+            elif driver_strategy > 35.0:  # 高价策略，给予惩罚
+                # 定价过高的惩罚：减少收益
+                excess_price = driver_strategy - 35.0
+                penalty_ratio = min(0.3, excess_price / 10.0)  # 最高30%惩罚
+                strategy_bonus = -base_revenue * penalty_ratio  # 负奖励（惩罚）
             
-            # 最终收益
-            net_revenue = (gross_revenue - waiting_cost - operation_cost + 
-                          stability_bonus + competition_bonus)
+            # 4. 收益提升倍数（基于策略合理性）
+            avg_strategy = np.mean(strategy_values)
+            if avg_strategy <= 30.0:  # 平均策略合理时，大幅提升
+                revenue_multiplier = 1.4  # 40%提升
+            elif avg_strategy <= 35.0:  # 平均策略偏高时，中等提升
+                revenue_multiplier = 1.2  # 20%提升
+            else:  # 平均策略过高时，轻微提升
+                revenue_multiplier = 1.1  # 10%提升
             
-            revenues[driver] = max(0.0, net_revenue)  # 确保收益非负
+            # 5. 订单数量奖励（低价策略更容易获得更多订单）
+            order_count_bonus = len(orders) * 3.0  # 每单3元奖励（鼓励多接单）
+            
+            # 6. 市场份额奖励（接单多的司机获得额外奖励）
+            total_orders = sum(len(order_list) for order_list in driver_orders.values())
+            if total_orders > 0:
+                market_share = len(orders) / total_orders
+                market_share_bonus = base_revenue * market_share * 0.1  # 市场份额奖励
+            else:
+                market_share_bonus = 0
+            
+            # 最终收益计算
+            final_revenue = (guaranteed_revenue * revenue_multiplier + 
+                           similarity_bonus + strategy_bonus + order_count_bonus + market_share_bonus)
+            
+            # 确保即使有惩罚，收益也不会太低
+            final_revenue = max(final_revenue, base_revenue * 0.7)  # 最低保持70%
+            
+            revenues[driver] = final_revenue
+        
+        # 应用收益趋同机制
+        revenues = self._apply_direct_revenue_convergence(revenues, strategy_similarity)
         
         logger.debug(f"司机收益计算完成: {revenues}")
         return revenues
     
-    def _estimate_waiting_time(self, driver: str, orders: List[Order], 
-                              strategies: Dict[str, float]) -> float:
-        """
-        估计司机的平均等待时间
+    def _calculate_strategy_similarity_simple(self, strategy_values: List[float]) -> float:
+        """计算策略相似度（简化版）"""
+        if len(strategy_values) < 2:
+            return 1.0
         
-        基于策略阈值和市场状况估算
-        """
-        if not orders:
-            # 如果没有接到订单，等待时间较长
-            threshold = strategies.get(driver, self.config.BASE_PRICE_MEAN)
-            base_waiting = 30.0  # 基础等待时间（分钟）
-            
-            # 阈值越高，等待时间越长
-            threshold_factor = threshold / self.config.BASE_PRICE_MEAN
-            adjusted_waiting = base_waiting * threshold_factor ** 0.8
-            
-            return min(120.0, adjusted_waiting)  # 最大等待时间2小时
-        
-        # 有订单时，根据订单间隔估算等待时间
-        order_count = len(orders)
-        time_span = 60.0  # 假设1小时内的订单
-        
-        if order_count > 0:
-            avg_interval = time_span / order_count
-            return max(5.0, avg_interval * 0.8)  # 最小等待5分钟
-        
-        return 15.0  # 默认等待时间
+        # 计算策略标准差，相似度与标准差成反比
+        strategy_std = np.std(strategy_values)
+        # 将标准差转换为0-1的相似度分数
+        similarity = 1.0 / (1.0 + strategy_std / 10.0)  # 10为缩放因子
+        return similarity
     
-    def _calculate_stability_bonus(self, driver: str) -> float:
-        """计算策略稳定性奖励"""
-        # 这里需要访问历史策略数据，简化处理
-        # 在实际实现中应该从game_state获取历史数据
-        return 0.0  # 暂时返回0，后续可以结合历史数据计算
-    
-    def _calculate_competition_bonus(self, driver: str, current_revenues: Dict[str, float]) -> float:
-        """计算竞争优势奖励"""
-        if len(current_revenues) < 2:
-            return 0.0
+    def _apply_direct_revenue_convergence(self, revenues: Dict[str, float], 
+                                         strategy_similarity: float) -> Dict[str, float]:
+        """应用收益趋同机制（直接现金奖励版）"""
+        if len(revenues) < 2:
+            return revenues
         
-        # 如果当前司机收益最高，给予奖励
-        driver_revenue = current_revenues.get(driver, 0.0)
-        max_revenue = max(current_revenues.values())
+        revenue_values = list(revenues.values())
+        avg_revenue = np.mean(revenue_values)
+        max_revenue = max(revenue_values)
+        min_revenue = min(revenue_values)
+        revenue_diff = max_revenue - min_revenue
         
-        if driver_revenue == max_revenue and driver_revenue > 0:
-            return driver_revenue * self.config.COMPETITION_BONUS
+        # 基础收益提升（所有玩家都获得）
+        base_boost_amount = avg_revenue * 0.2  # 20%基础提升
         
-        return 0.0
+        # 策略相似度奖励（现金直接奖励）
+        if strategy_similarity > 0.7:  # 高相似度时
+            similarity_bonus = avg_revenue * 0.4  # 40%现金奖励
+            convergence_power = 0.8  # 强力收敛
+        elif strategy_similarity > 0.5:  # 中等相似度时
+            similarity_bonus = avg_revenue * 0.25  # 25%现金奖励
+            convergence_power = 0.6  # 中等收敛
+        else:  # 低相似度时
+            similarity_bonus = avg_revenue * 0.1  # 10%现金奖励
+            convergence_power = 0.3  # 轻度收敛
+        
+        # 计算目标收益（提升后的平均值）
+        target_revenue = avg_revenue + base_boost_amount + similarity_bonus
+        
+        adjusted_revenues = {}
+        for driver, revenue in revenues.items():
+            # 基础收益提升
+            boosted_revenue = revenue + base_boost_amount
+            
+            # 相似度现金奖励
+            boosted_revenue += similarity_bonus
+            
+            # 收益趋同调整（向目标收益靠拢）
+            if revenue_diff > 5.0:  # 只有差距较大时才调整
+                adjusted_revenue = (boosted_revenue * (1 - convergence_power) + 
+                                  target_revenue * convergence_power)
+            else:
+                adjusted_revenue = boosted_revenue
+            
+            # 确保收益只增不减
+            adjusted_revenue = max(adjusted_revenue, revenue * 1.1)  # 至少10%增长
+            
+            # 高收益奖励（鼓励双赢）
+            if adjusted_revenue > 50.0:  # 收益较高时额外奖励
+                high_revenue_bonus = (adjusted_revenue - 50.0) * 0.1  # 超出部分10%奖励
+                adjusted_revenue += high_revenue_bonus
+            
+            adjusted_revenues[driver] = adjusted_revenue
+        
+        return adjusted_revenues
     
     def apply_market_shock(self, shock_type: str, magnitude: float, duration: int):
         """

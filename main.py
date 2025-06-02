@@ -4,7 +4,7 @@
 主执行脚本
 
 这是一个包含AI智能体的两人博弈实验，模拟出租车司机之间的动态定价竞争。
-实验包含三个阶段：探索期(1-50轮)、学习期(51-200轮)、均衡期(201-500轮)。
+实验总计模拟30天（720轮，每轮1小时），包含三个阶段：探索期(1-50轮)、学习期(51-200轮)、均衡期(201-720轮)。
 
 运行方式：
 python main.py [experiment_type] [--config config.json]
@@ -93,6 +93,7 @@ def run_symmetric_experiment(config: GameConfig) -> dict:
         experiment_name="symmetric_pricing_game",
         experiment_type="symmetric",
         total_rounds=config.MAX_ROUNDS,
+        num_runs=1,  # 只运行1次
         player_configs={
             '司机A': {'type': 'ai', 'learning_rate': 0.01, 'exploration_rate': 0.1},
             '司机B': {'type': 'ai', 'learning_rate': 0.01, 'exploration_rate': 0.1}
@@ -119,6 +120,7 @@ def run_asymmetric_experiment(config: GameConfig) -> dict:
         experiment_name="asymmetric_pricing_game", 
         experiment_type="asymmetric",
         total_rounds=config.MAX_ROUNDS,
+        num_runs=1,  # 只运行1次
         player_configs={
             '经验司机': {
                 'type': 'ai', 
@@ -157,6 +159,7 @@ def run_shock_test(config: GameConfig) -> dict:
         experiment_name="market_shock_test",
         experiment_type="shock_test",
         total_rounds=config.MAX_ROUNDS,
+        num_runs=1,  # 只运行1次
         player_configs={
             '司机A': {'type': 'ai', 'learning_rate': 0.01, 'exploration_rate': 0.1},
             '司机B': {'type': 'ai', 'learning_rate': 0.01, 'exploration_rate': 0.1}
@@ -385,8 +388,8 @@ def main():
                        help='实验类型')
     parser.add_argument('--config', '-c', 
                        help='配置文件路径')
-    parser.add_argument('--rounds', '-r', type=int, default=500,
-                       help='博弈轮数 (默认500)')
+    parser.add_argument('--rounds', '-r', type=int, default=720,
+                       help='博弈轮数 (默认720，相当于30天)')
     parser.add_argument('--no-analysis', action='store_true',
                        help='跳过结果分析')
     
@@ -397,7 +400,7 @@ def main():
     
     # 加载配置
     config = load_config(args.config)
-    if args.rounds != 500:
+    if args.rounds != 720:
         config.MAX_ROUNDS = args.rounds
     
     logger.info("🚀 博弈论实验开始")

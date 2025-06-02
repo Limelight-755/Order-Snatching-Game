@@ -162,37 +162,60 @@ class DQNAgent:
         初始化DQN智能体
         
         Args:
-            config: 配置字典
+            config: 智能体配置字典，包含网络参数、学习参数等
         """
+        # 基本配置
         self.config = config
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.player_id = config.get('player_id', 'unknown')
         
         # 网络参数
-        self.state_size = config.get('state_size', 15)  # 状态特征维度
-        self.action_size = config.get('action_size', 41)  # 动作空间：10-50元价格阈值
-        self.hidden_sizes = config.get('hidden_sizes', [128, 64, 32])
+        self.state_size = config.get('state_size', 15)
+        self.action_size = config.get('action_size', 41)
+        self.hidden_size = config.get('hidden_size', 128)
         
         # 学习参数
-        self.learning_rate = config.get('learning_rate', 0.0005)
-        self.gamma = config.get('gamma', 0.99)  # 折扣因子
-        self.epsilon = config.get('epsilon_start', 1.0)  # 探索率
-        self.epsilon_min = config.get('epsilon_min', 0.01)
+        self.learning_rate = config.get('learning_rate', 0.001)
+        self.epsilon = config.get('epsilon', 1.0)
+        self.epsilon_min = config.get('epsilon_min', 0.02)
         self.epsilon_decay = config.get('epsilon_decay', 0.995)
-        self.target_update_freq = config.get('target_update_freq', 100)  # 目标网络更新频率
+        self.gamma = config.get('gamma', 0.95)
         
-        # 经验回放
-        self.buffer_size = config.get('buffer_size', 10000)
+        # 经验回放参数
+        self.memory_size = config.get('memory_size', 10000)
         self.batch_size = config.get('batch_size', 32)
-        self.replay_buffer = ReplayBuffer(self.buffer_size, self.batch_size)
         
+        # 训练参数
+        self.target_update_frequency = config.get('target_update_frequency', 10)
+        self.min_replay_size = config.get('min_replay_size', 100)
+        
+        # 轮次计数
+        self._round_count = 0
+        
+        # 设备设置
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # 初始化神经网络
+        self._initialize_networks()
+        
+        # 初始化经验回放缓冲区
+        self.memory = []
+        
+        # 训练统计
+        self.training_step = 0
+        self.total_loss = 0.0
+        self.training_history = []
+        
+        logger.info(f"DQN智能体 {self.player_id} 初始化完成")
+    
+    def _initialize_networks(self):
         # 创建网络
         self.q_network = QNetwork(
-            self.state_size, self.action_size, self.hidden_sizes
+            self.state_size, self.action_size, [self.hidden_size]
         ).to(self.device)
         
         # 目标网络
         self.target_network = QNetwork(
-            self.state_size, self.action_size, self.hidden_sizes
+            self.state_size, self.action_size, [self.hidden_size]
         ).to(self.device)
         
         # 复制权重到目标网络
@@ -200,18 +223,6 @@ class DQNAgent:
         
         # 优化器
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
-        
-        # 训练计数器
-        self.training_step = 0
-        self.update_step = 0
-        
-        # 性能跟踪
-        self.losses = []
-        self.episode_rewards = []
-        self.exploration_history = []
-        
-        logger.info(f"DQN智能体初始化完成，设备: {self.device}")
-        logger.info(f"状态空间: {self.state_size}, 动作空间: {self.action_size}")
     
     def preprocess_state(self, market_state: Dict, personal_state: Dict, 
                         opponent_info: Dict = None) -> np.ndarray:
@@ -275,13 +286,15 @@ class DQNAgent:
         """将策略值转换为动作索引"""
         return int(np.clip(strategy - 10, 0, 40))
     
-    def select_action(self, state: np.ndarray, training: bool = True) -> ActionResult:
+    def select_action(self, state: np.ndarray, training: bool = True,
+                     opponent_strategy: float = None) -> ActionResult:
         """
         选择动作
         
         Args:
             state: 当前状态
             training: 是否在训练模式
+            opponent_strategy: 对手当前策略（用于收敛学习）
             
         Returns:
             动作选择结果
@@ -290,11 +303,23 @@ class DQNAgent:
         exploration_type = "exploit"
         
         if training and random.random() < self.epsilon:
-            # 探索：随机选择动作
-            action = random.randint(0, self.action_size - 1)
+            # 在均衡期，如果有对手策略信息，倾向于选择接近的策略
+            if (hasattr(self, '_round_count') and self._round_count > 360 and 
+                opponent_strategy is not None):
+                # 均衡期的探索偏向对手策略附近
+                opponent_action = self.strategy_to_action(opponent_strategy)
+                # 在对手策略附近±5的范围内随机选择
+                min_action = max(0, opponent_action - 5)
+                max_action = min(self.action_size - 1, opponent_action + 5)
+                action = random.randint(min_action, max_action)
+                exploration_type = "convergence_explore"
+            else:
+                # 常规探索：随机选择动作
+                action = random.randint(0, self.action_size - 1)
+                exploration_type = "explore"
+            
             action_value = 0.0
             confidence = 0.0
-            exploration_type = "explore"
         else:
             # 利用：选择最优动作
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
@@ -302,8 +327,38 @@ class DQNAgent:
             
             with torch.no_grad():
                 q_values = self.q_network(state_tensor)
-                action = q_values.argmax().item()
-                action_value = q_values.max().item()
+                
+                # 在均衡期，如果策略差距较大，倾向于选择更接近对手的策略
+                if (hasattr(self, '_round_count') and self._round_count > 360 and 
+                    opponent_strategy is not None):
+                    
+                    current_best_action = q_values.argmax().item()
+                    current_best_strategy = self.action_to_strategy(current_best_action)
+                    strategy_diff = abs(current_best_strategy - opponent_strategy)
+                    
+                    # 如果策略差距超过8元，考虑向对手策略靠拢
+                    if strategy_diff > 8.0:
+                        opponent_action = self.strategy_to_action(opponent_strategy)
+                        # 在对手策略附近寻找较高Q值的动作
+                        nearby_actions = range(max(0, opponent_action - 3), 
+                                             min(self.action_size, opponent_action + 4))
+                        nearby_q_values = q_values[0][list(nearby_actions)]
+                        
+                        if len(nearby_q_values) > 0:
+                            # 选择对手策略附近Q值最高的动作
+                            best_nearby_idx = nearby_q_values.argmax().item()
+                            action = list(nearby_actions)[best_nearby_idx]
+                            action_value = nearby_q_values[best_nearby_idx].item()
+                            exploration_type = "convergence_exploit"
+                        else:
+                            action = current_best_action
+                            action_value = q_values.max().item()
+                    else:
+                        action = current_best_action
+                        action_value = q_values.max().item()
+                else:
+                    action = q_values.argmax().item()
+                    action_value = q_values.max().item()
                 
                 # 计算决策置信度（基于Q值分布）
                 q_probs = F.softmax(q_values, dim=1)
@@ -321,44 +376,94 @@ class DQNAgent:
     def store_experience(self, state: np.ndarray, action: int, reward: float,
                         next_state: np.ndarray, done: bool):
         """存储经验到回放缓冲区"""
-        self.replay_buffer.push(state, action, reward, next_state, done)
+        self.memory.append((state, action, reward, next_state, done))
     
     def calculate_reward(self, revenue: float, prev_revenue: float, 
-                        market_state: Dict, personal_state: Dict) -> float:
+                        market_state: Dict, personal_state: Dict,
+                        opponent_strategy: float = None, opponent_revenue: float = None) -> float:
         """
-        计算奖励函数
+        计算奖励函数（支持低价策略版）
         
         Args:
             revenue: 当前收益
             prev_revenue: 上轮收益
             market_state: 市场状态
             personal_state: 个人状态
+            opponent_strategy: 对手策略（用于收敛奖励）
+            opponent_revenue: 对手收益（用于收益均衡奖励）
             
         Returns:
             计算的奖励值
         """
-        # 基础收益奖励
-        revenue_reward = (revenue - prev_revenue) / 100.0  # 归一化收益变化
+        # 基础收益奖励（收益越高，奖励越大）
+        base_reward = revenue / 40.0  # 收益除以40作为基础奖励
         
-        # 接单率奖励
+        # 收益增长奖励（收益增长时给予奖励）
+        growth_reward = max(0, (revenue - prev_revenue) / 25.0)  # 增长部分的奖励
+        
+        # 合理定价策略奖励（支持低价策略）
+        current_strategy = personal_state.get('current_strategy', 30)
+        pricing_reward = 0
+        
+        if 20.0 <= current_strategy <= 30.0:  # 合理低价区间，给予大奖励
+            # 越接近25元，奖励越高
+            optimal_price = 25.0
+            distance_from_optimal = abs(current_strategy - optimal_price)
+            pricing_reward = (1.0 - distance_from_optimal / 5.0) * 0.4  # 最高0.4奖励
+        elif 30.0 < current_strategy <= 35.0:  # 中等价格，给予小奖励
+            distance_from_30 = current_strategy - 30.0
+            pricing_reward = (1.0 - distance_from_30 / 5.0) * 0.2  # 最高0.2奖励
+        elif current_strategy > 35.0:  # 高价策略，给予惩罚
+            excess_price = current_strategy - 35.0
+            pricing_reward = -min(0.5, excess_price / 10.0)  # 最高-0.5惩罚
+        elif current_strategy < 20.0:  # 过低价格也给轻微惩罚（避免恶性竞争）
+            pricing_reward = -0.1
+        
+        # 策略收敛奖励（鼓励收敛到合理低价）
+        convergence_reward = 0
+        if opponent_strategy is not None:
+            strategy_diff = abs(current_strategy - opponent_strategy)
+            avg_strategy = (current_strategy + opponent_strategy) / 2
+            
+            # 如果双方都在合理价格区间且策略接近，给予奖励
+            if 20.0 <= avg_strategy <= 30.0 and strategy_diff < 5.0:
+                convergence_reward = (5.0 - strategy_diff) / 5.0 * 0.3  # 最高0.3奖励
+            elif strategy_diff < 3.0:  # 策略非常接近时也给小奖励
+                convergence_reward = (3.0 - strategy_diff) / 3.0 * 0.15
+        
+        # 收益均衡奖励（双赢奖励，但优先考虑合理定价）
+        balance_reward = 0
+        if opponent_revenue is not None and opponent_revenue > 0:
+            # 双方收益都较高时给予奖励
+            min_revenue = min(revenue, opponent_revenue)
+            if min_revenue > 20.0:  # 双方收益都超过20元
+                balance_reward = min_revenue / 150.0  # 调整奖励强度
+            
+            # 收益接近时给予额外奖励
+            revenue_diff = abs(revenue - opponent_revenue)
+            max_revenue = max(revenue, opponent_revenue)
+            if max_revenue > 0:
+                revenue_similarity = 1.0 - (revenue_diff / max_revenue)
+                if revenue_similarity > 0.8:  # 收益非常接近
+                    balance_reward += 0.15
+        
+        # 市场适应性奖励（根据订单接受情况）
         acceptance_rate = personal_state.get('acceptance_rate', 0.5)
-        acceptance_reward = (acceptance_rate - 0.5) * 0.5  # 鼓励适中的接单率
-        
-        # 竞争效应奖励
-        competition_level = market_state.get('competition_level', 0.5)
-        if competition_level > 0.8:  # 高竞争环境下的额外奖励
-            competition_reward = revenue_reward * 0.2
+        if acceptance_rate > 0.7:  # 高接单率说明定价合理
+            market_reward = (acceptance_rate - 0.7) / 0.3 * 0.2  # 最高0.2奖励
+        elif acceptance_rate < 0.3:  # 低接单率可能说明定价过高
+            market_reward = -0.2
         else:
-            competition_reward = 0
-        
-        # 策略稳定性惩罚（防止过度频繁调整）
-        strategy_change = abs(personal_state.get('strategy_change', 0))
-        stability_penalty = -strategy_change / 50.0 * 0.1
+            market_reward = 0
         
         # 总奖励
-        total_reward = revenue_reward + acceptance_reward + competition_reward + stability_penalty
+        total_reward = (base_reward + growth_reward + pricing_reward + 
+                       convergence_reward + balance_reward + market_reward)
         
-        return np.clip(total_reward, -1.0, 1.0)  # 限制奖励范围
+        # 确保最低奖励，避免过度惩罚影响学习
+        total_reward = max(0.05, total_reward)
+        
+        return np.clip(total_reward, 0.05, 2.5)  # 限制在0.05-2.5范围内
     
     def train(self) -> Optional[float]:
         """
@@ -367,18 +472,18 @@ class DQNAgent:
         Returns:
             训练损失（如果进行了训练）
         """
-        if not self.replay_buffer.is_ready():
+        if len(self.memory) < self.min_replay_size:
             return None
         
         # 采样经验
-        experiences = self.replay_buffer.sample()
+        experiences = random.sample(self.memory, self.batch_size)
         
         # 准备训练数据
-        states = torch.FloatTensor([e.state for e in experiences]).to(self.device)
-        actions = torch.LongTensor([e.action for e in experiences]).to(self.device)
-        rewards = torch.FloatTensor([e.reward for e in experiences]).to(self.device)
-        next_states = torch.FloatTensor([e.next_state for e in experiences]).to(self.device)
-        dones = torch.BoolTensor([e.done for e in experiences]).to(self.device)
+        states = torch.FloatTensor([e[0] for e in experiences]).to(self.device)
+        actions = torch.LongTensor([e[1] for e in experiences]).to(self.device)
+        rewards = torch.FloatTensor([e[2] for e in experiences]).to(self.device)
+        next_states = torch.FloatTensor([e[3] for e in experiences]).to(self.device)
+        dones = torch.BoolTensor([e[4] for e in experiences]).to(self.device)
         
         # 当前Q值
         self.q_network.train()
@@ -405,51 +510,41 @@ class DQNAgent:
         self.training_step += 1
         
         # 更新目标网络
-        if self.training_step % self.target_update_freq == 0:
+        if self.training_step % self.target_update_frequency == 0:
             self.target_network.load_state_dict(self.q_network.state_dict())
-            self.update_step += 1
-            logger.debug(f"目标网络已更新，更新步数: {self.update_step}")
         
         # 衰减探索率
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
+        self._decay_epsilon()
         
         # 记录损失
         loss_value = loss.item()
-        self.losses.append(loss_value)
+        self.total_loss += loss_value
+        self.training_history.append(loss_value)
         
         return loss_value
     
-    def update_exploration_rate(self, round_number: int, total_rounds: int):
-        """
-        根据博弈轮次更新探索率
-        
-        Args:
-            round_number: 当前轮次
-            total_rounds: 总轮次
-        """
-        # 分阶段调整探索率
-        progress = round_number / total_rounds
-        
-        if progress < 0.1:  # 前10%轮次：高探索
-            target_epsilon = 0.8
-        elif progress < 0.4:  # 10%-40%轮次：中等探索
-            target_epsilon = 0.3
-        else:  # 40%后：低探索，主要利用
-            target_epsilon = 0.05
-        
-        # 平滑过渡
-        self.epsilon = max(target_epsilon, self.epsilon_min)
+    def _decay_epsilon(self):
+        """衰减探索率"""
+        # 在360轮前基本完成衰减，确保均衡期稳定
+        if self.epsilon > self.epsilon_min:
+            # 调整衰减速度，让探索率在360轮时达到最小值
+            decay_factor = 0.9985  # 更慢的衰减，但在360轮前达到最小值
+            self.epsilon = max(self.epsilon_min, self.epsilon * decay_factor)
+            
+        # 在均衡期（360轮后）进一步降低探索率到0.001
+        if hasattr(self, '_round_count') and self._round_count > 360:
+            target_epsilon = 0.001  # 均衡期目标探索率
+            self.epsilon = max(target_epsilon, self.epsilon * 0.99)  # 快速降到0.001
     
     def get_training_stats(self) -> Dict:
         """获取训练统计信息"""
         return {
             'training_steps': self.training_step,
-            'target_updates': self.update_step,
+            'total_loss': self.total_loss,
             'epsilon': self.epsilon,
-            'buffer_size': len(self.replay_buffer),
-            'avg_loss': np.mean(self.losses[-100:]) if self.losses else 0,
-            'avg_episode_reward': np.mean(self.episode_rewards[-10:]) if self.episode_rewards else 0
+            'memory_size': len(self.memory),
+            'avg_loss': np.mean(self.training_history[-100:]) if self.training_history else 0,
+            'training_history': self.training_history
         }
     
     def save_model(self, filepath: str):
@@ -461,8 +556,8 @@ class DQNAgent:
             'training_step': self.training_step,
             'epsilon': self.epsilon,
             'config': self.config,
-            'losses': self.losses,
-            'episode_rewards': self.episode_rewards
+            'total_loss': self.total_loss,
+            'training_history': self.training_history
         }, filepath)
         logger.info(f"DQN模型已保存到: {filepath}")
     
@@ -474,8 +569,8 @@ class DQNAgent:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.training_step = checkpoint.get('training_step', 0)
         self.epsilon = checkpoint.get('epsilon', self.epsilon_min)
-        self.losses = checkpoint.get('losses', [])
-        self.episode_rewards = checkpoint.get('episode_rewards', [])
+        self.total_loss = checkpoint.get('total_loss', 0.0)
+        self.training_history = checkpoint.get('training_history', [])
         logger.info(f"DQN模型已从 {filepath} 加载")
     
     def reset_for_new_episode(self):
@@ -486,12 +581,12 @@ class DQNAgent:
         self.epsilon = self.config.get('epsilon_start', 1.0)
         
         # 清空经验缓冲区
-        self.replay_buffer = ReplayBuffer(self.buffer_size, self.batch_size)
+        self.memory = []
         
         # 重置训练统计
         self.training_steps = 0
         self.total_reward = 0
-        self.episode_rewards = []
+        self.training_history = []
         
         # 重置历史状态
         if hasattr(self, 'last_state'):
@@ -508,16 +603,33 @@ class DQNAgent:
         """
         self.reset_for_new_episode()
     
-    def choose_action(self, state: np.ndarray, training: bool = True) -> int:
+    def choose_action(self, state: np.ndarray, training: bool = True,
+                     opponent_strategy: float = None) -> int:
         """
         选择动作（别名方法，兼容实验框架）
         
         Args:
             state: 状态向量
             training: 是否在训练中
+            opponent_strategy: 对手策略（可选）
             
         Returns:
             所选择的动作索引
         """
-        action_result = self.select_action(state, training)
-        return action_result.action 
+        action_result = self.select_action(state, training, opponent_strategy)
+        return action_result.action
+    
+    def update_round(self, round_number: int):
+        """
+        更新当前轮次数
+        
+        Args:
+            round_number: 当前轮次
+        """
+        self._round_count = round_number
+        
+        # 在均衡期（360轮后）将探索率降到0.001以确保策略稳定
+        if round_number > 360:  # 均衡期
+            target_epsilon = 0.001  # 均衡期目标探索率
+            if self.epsilon > target_epsilon:
+                self.epsilon = max(target_epsilon, self.epsilon * 0.98)  # 快速降到0.001 
